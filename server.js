@@ -6,7 +6,7 @@ import * as cheerio from "cheerio";
 const app = express();
 const PORT = 3000;
 
-const CORS_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"];
+const CORS_ORIGINS = ["http://localhost:5173", "https://checkx.vercel.app"];
 
 app.use(
   cors({

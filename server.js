@@ -225,9 +225,24 @@ const CBE_API_HEADERS = {
   Accept: "application/json",
 };
 
+function normalizeCbeReceiptId(rawId) {
+  const trimmed = String(rawId || "").trim();
+  if (!trimmed) return null;
+
+  const fromUrl = trimmed.match(
+    /(?:mbreciept\.cbe\.com\.et|mb\.cbe\.com\.et)\/([^\/?#]+)/i
+  );
+  if (fromUrl) return fromUrl[1];
+
+  return trimmed;
+}
+
 function isValidCbeReceiptId(id) {
-  // Example: FT26132S41Y6-85094136
-  return /^FT[A-Z0-9]+-\d+$/i.test(id);
+  // Legacy: FT26132S41Y6-85094136
+  // V2: v2-hfHCxzixhYQx8V4BijpP
+  return (
+    /^FT[A-Z0-9]+-\d+$/i.test(id) || /^v2-[A-Za-z0-9]+$/i.test(id)
+  );
 }
 
 // Convert "20260512" -> "2026-05-12"
@@ -248,14 +263,16 @@ function splitCbeIsoDateTime(iso) {
 }
 
 async function scrapeCbeReceipt(receiptId) {
-  if (!isValidCbeReceiptId(receiptId)) {
+  const normalizedId = normalizeCbeReceiptId(receiptId);
+  if (!normalizedId || !isValidCbeReceiptId(normalizedId)) {
     throw new Error(
-      "Invalid CBE receipt id. Expected format: FT26132S41Y6-85094136"
+      "Invalid CBE receipt id. Expected format: FT26132S41Y6-85094136 or v2-hfHCxzixhYQx8V4BijpP"
     );
   }
 
-  const cleanReceiptId = receiptId.toUpperCase();
-  const url = `${CBE_API_BASE}/${cleanReceiptId}`;
+  const isV2 = /^v2-/i.test(normalizedId);
+  const apiReceiptId = isV2 ? normalizedId : normalizedId.toUpperCase();
+  const url = `${CBE_API_BASE}/${apiReceiptId}`;
 
   const response = await axios.get(url, {
     headers: CBE_API_HEADERS,
@@ -270,13 +287,25 @@ async function scrapeCbeReceipt(receiptId) {
       : null;
   const { date: isoDate, time } = splitCbeIsoDateTime(isoDateTime);
   const date = isoDate || formatCbeDate(data.processingDate);
+  const occurred_at = isoDateTime || null;
+
+  const transactionType =
+    (Array.isArray(data.paymentDetails) && data.paymentDetails[0]) ||
+    data.transactionType ||
+    null;
 
   return {
     provider: "cbe",
-    transaction_id: data.id || cleanReceiptId.split("-")[0],
+    transaction_id:
+      data.id || (isV2 ? null : apiReceiptId.split("-")[0]) || apiReceiptId,
     date,
     time,
-    amount: parseAmount(data.amountDebited ?? data.debitAmount),
+    occurred_at,
+    amount: parseAmount(
+      data.amountCredited ?? data.creditAmount ?? data.debitAmount
+    ),
+    currency: data.creditCurrency || data.debitCurrency || "ETB",
+    transaction_type: transactionType,
     sender: data.debitAccountHolder || null,
     receiver: data.creditAccountHolder || null,
   };
@@ -295,7 +324,7 @@ app.get("/", (req, res) => {
     },
     examples: {
       telebirr: "/receipt/telebirr/984559233",
-      cbe: "/receipt/cbe/FT26132S41Y6-85094136",
+      cbe: "/receipt/cbe/v2-hfHCxzixhYQx8V4BijpP",
     },
   });
 });
@@ -322,8 +351,12 @@ app.get("/receipt/cbe/:id", async (req, res) => {
   } catch (error) {
     console.error("CBE error:", error.message);
 
+    const apiDetail = String(error.response?.data?.detail || "");
     const status =
       error.response?.status === 404
+        ? 404
+        : error.response?.status === 500 &&
+          apiDetail.toLowerCase().includes("invalid v2 token")
         ? 404
         : error.message.startsWith("Invalid CBE")
         ? 400
@@ -345,6 +378,6 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Telebirr: http://localhost:${PORT}/receipt/telebirr/984559233`);
   console.log(
-    `CBE: http://localhost:${PORT}/receipt/cbe/FT26132S41Y6-85094136`
+    `CBE: http://localhost:${PORT}/receipt/cbe/v2-hfHCxzixhYQx8V4BijpP`
   );
 });
